@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environnements / secrets
+.env
+*.env
+
+# Bases de données / données locales
+*.db
+*.sqlite
+*.sqlite3
+
+# Exports / données générées
+*.csv
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
