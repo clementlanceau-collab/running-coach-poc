@@ -92,6 +92,12 @@ def _base_cte(where_clause: str):
     """
 
 
+def _format_date(s: str) -> str:
+    if not s:
+        return ""
+    return s[:10]
+
+
 def dashboard_principal(conn, period: str):
     where_clause, params = get_period_filter(period)
     period_title = period.upper() if period != "all" else "ALL TIME"
@@ -130,37 +136,62 @@ def dashboard_principal(conn, period: str):
         + """
         SELECT
             COUNT(*) AS n_sessions,
-            ROUND(SUM(COALESCE(distance_m, 0)) / 1000.0, 1) AS km
+            ROUND(SUM(COALESCE(distance_m, 0)) / 1000.0, 1) AS km,
+            ROUND(SUM(COALESCE(time_s, 0)) / 60.0, 1) AS minutes
         FROM activity_metrics
         WHERE type = 'Run'
         """,
         params,
     )
-    n_run, km_run = rows[0]
+    n_run, km_run, run_minutes = rows[0]
     print("BLOC B — Volume course (Run)")
     print(f"  Séances RUN : {int(n_run)}")
-    print(f"  Distance    : {float(km_run or 0):.1f} km\n")
+    print(f"  Distance    : {float(km_run or 0):.1f} km")
+    print(f"  Temps (via streams) : {float(run_minutes or 0):.1f} min\n")
 
-    # ---- BLOC C : intensité déclarée (minutes + %) ----
+    # ---- BLOC C : intensité déclarée (minutes + %) + couverture ----
+    # coverage = distinct Run activities with at least one intensity row / total Run activities (period)
+    coverage_rows = q(
+        conn,
+        f"""
+        WITH runs_period AS (
+            SELECT a.activity_id
+            FROM activities a
+            WHERE a.type = 'Run' {where_clause}
+        ),
+        runs_with_intensity AS (
+            SELECT DISTINCT si.activity_id
+            FROM session_intensity si
+            JOIN runs_period rp ON rp.activity_id = si.activity_id
+        )
+        SELECT
+            (SELECT COUNT(*) FROM runs_with_intensity) AS n_with_intensity,
+            (SELECT COUNT(*) FROM runs_period) AS n_runs
+        """,
+        params,
+    )
+    n_with_intensity, n_runs = coverage_rows[0]
+
     rows = q(
         conn,
         f"""
-        WITH filtered_activities AS (
+        WITH filtered_runs AS (
             SELECT a.activity_id
             FROM activities a
-            WHERE 1=1 {where_clause}
+            WHERE a.type = 'Run' {where_clause}
         )
         SELECT
             si.bucket,
             SUM(si.seconds) AS seconds
         FROM session_intensity si
-        JOIN filtered_activities fa ON fa.activity_id = si.activity_id
+        JOIN filtered_runs fr ON fr.activity_id = si.activity_id
         GROUP BY si.bucket
         """,
         params,
     )
 
-    print("BLOC C — Répartition intensité déclarée (déclaratif)")
+    print("BLOC C — Répartition intensité déclarée (déclaratif, Run)")
+    print(f"  Couverture: {int(n_with_intensity)} / {int(n_runs)} séances Run avec intensité renseignée")
     if rows:
         total_s = sum(float(r[1] or 0) for r in rows)
         total_min = total_s / 60.0 if total_s > 0 else 0.0
@@ -177,7 +208,7 @@ def dashboard_principal(conn, period: str):
         print("  (aucune intensité déclarée sur la période)")
     print()
 
-    # ---- BLOC D : charge interne (Run-only) ----
+    # ---- BLOC D : charge interne (RPE × durée) — Run-only + couverture ----
     rows = q(
         conn,
         base_cte
@@ -195,7 +226,8 @@ def dashboard_principal(conn, period: str):
     load, n_with_rpe, n_total = rows[0]
     print("BLOC D — Charge interne (RPE × durée) — Run")
     print(f"  Charge totale : {float(load or 0):.1f}")
-    print(f"  Couverture RPE: {int(n_with_rpe)} / {int(n_total)} séances Run sur la période\n")
+    print(f"  Couverture RPE: {int(n_with_rpe)} / {int(n_total)} séances Run sur la période")
+    print("  Note: durée utilisée = time_s issue des streams Strava.\n")
 
     # ---- BLOC E : performance factuelle (Run) ----
     rows = q(
@@ -322,12 +354,6 @@ def dashboard_principal(conn, period: str):
     print("============================================================\n")
 
 
-def _format_date(s: str) -> str:
-    if not s:
-        return ""
-    return s[:10]
-
-
 def advanced_list(conn, period: str, limit: int):
     where_clause, params = get_period_filter(period)
     period_title = period.upper() if period != "all" else "ALL TIME"
@@ -335,7 +361,6 @@ def advanced_list(conn, period: str, limit: int):
 
     base_cte = _base_cte(where_clause)
 
-    # per-activity declared intensity minutes
     intensity_rows = q(
         conn,
         f"""
@@ -416,7 +441,6 @@ def advanced_list(conn, period: str, limit: int):
 def advanced_detail(conn, activity_id: int):
     _print_header(f"DASHBOARD — MODE ADVANCED (DETAIL) | ACTIVITY_ID: {activity_id}")
 
-    # Basic activity info
     rows = q(
         conn,
         """
@@ -432,7 +456,6 @@ def advanced_detail(conn, activity_id: int):
 
     aid, start_date_local, typ, name = rows[0]
 
-    # Stream-derived metrics
     metrics = q(
         conn,
         """
@@ -447,7 +470,6 @@ def advanced_detail(conn, activity_id: int):
     )[0]
     km, minutes, avg_hr = metrics
 
-    # D+ via altitude deltas
     dplus = q(
         conn,
         """
@@ -464,7 +486,6 @@ def advanced_detail(conn, activity_id: int):
         (activity_id,),
     )[0][0]
 
-    # Context / RPE / notes
     ctx = q(
         conn,
         "SELECT terrain_type, shoes, context_note FROM session_context WHERE activity_id = ?",
@@ -512,10 +533,6 @@ def advanced_detail(conn, activity_id: int):
     print(f"Terrain   : {terrain_type or '(vide)'}")
     print(f"Chaussures: {shoes or '(vide)'}")
     print(f"RPE       : {rpe if rpe is not None else '(vide)'}")
-    if rpe_note:
-        print(f"RPE note  : {rpe_note}")
-    if context_note:
-        print(f"Contexte  : {context_note}")
 
     print("\nIntensité déclarée (minutes)")
     if inten_rows:
@@ -523,8 +540,6 @@ def advanced_detail(conn, activity_id: int):
             print(f"  {bucket}: {float(minutes or 0):.1f} min")
     else:
         print("  (aucune intensité déclarée)")
-    if intensity_note:
-        print(f"Note intensité: {intensity_note}")
 
     print("\n============================================================\n")
 
