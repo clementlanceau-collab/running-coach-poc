@@ -150,7 +150,6 @@ def dashboard_principal(conn, period: str):
     print(f"  Temps (via streams) : {float(run_minutes or 0):.1f} min\n")
 
     # ---- BLOC C : intensité déclarée (minutes + %) + couverture ----
-    # coverage = distinct Run activities with at least one intensity row / total Run activities (period)
     coverage_rows = q(
         conn,
         f"""
@@ -533,6 +532,10 @@ def advanced_detail(conn, activity_id: int):
     print(f"Terrain   : {terrain_type or '(vide)'}")
     print(f"Chaussures: {shoes or '(vide)'}")
     print(f"RPE       : {rpe if rpe is not None else '(vide)'}")
+    if rpe_note:
+        print(f"RPE note  : {rpe_note}")
+    if context_note:
+        print(f"Contexte  : {context_note}")
 
     print("\nIntensité déclarée (minutes)")
     if inten_rows:
@@ -540,6 +543,8 @@ def advanced_detail(conn, activity_id: int):
             print(f"  {bucket}: {float(minutes or 0):.1f} min")
     else:
         print("  (aucune intensité déclarée)")
+    if intensity_note:
+        print(f"Note intensité: {intensity_note}")
 
     print("\n============================================================\n")
 
