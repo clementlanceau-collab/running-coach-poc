@@ -6,37 +6,16 @@ from app.dashboard.db import connect_db, ensure_dashboard_tables, q
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Running Dashboard")
-    parser.add_argument(
-        "--mode",
-        choices=["principal", "advanced"],
-        required=True,
-        help="Dashboard mode",
-    )
-    parser.add_argument(
-        "--period",
-        choices=["month", "year", "all"],
-        default="month",
-        help="Time period filter (applies to list views).",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=20,
-        help="Limit for advanced list view.",
-    )
-    parser.add_argument(
-        "--activity-id",
-        type=int,
-        default=None,
-        help="Show details for a single activity_id (advanced mode).",
-    )
+    parser.add_argument("--mode", choices=["principal", "advanced"], required=True)
+    parser.add_argument("--period", choices=["month", "year", "all"], default="month")
+    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--activity-id", type=int, default=None)
     return parser.parse_args()
 
 
 def get_period_filter(period: str):
     """
-    Returns (where_sql_fragment, params_tuple)
-    activities.start_date_local is stored as ISO string (e.g., 2025-12-26T16:30:15Z).
+    activities.start_date_local is ISO string, often like '2025-12-26T16:30:15Z'.
     """
     if period == "all":
         return "", ()
@@ -57,7 +36,7 @@ def _print_header(title: str):
 
 def _base_cte(where_clause: str):
     """
-    CTE used by principal/advanced to compute per-activity metrics from stream_points.
+    Compute per-activity metrics from stream_points:
     - distance_m = max(distance_m)
     - time_s = max(time_s)
     - avg_hr = avg(heartrate_bpm)
@@ -93,9 +72,7 @@ def _base_cte(where_clause: str):
 
 
 def _format_date(s: str) -> str:
-    if not s:
-        return ""
-    return s[:10]
+    return s[:10] if s else ""
 
 
 def dashboard_principal(conn, period: str):
@@ -105,7 +82,7 @@ def dashboard_principal(conn, period: str):
 
     base_cte = _base_cte(where_clause)
 
-    # ---- BLOC A : activité globale multisport ----
+    # ---- BLOC A : multisport ----
     rows = q(
         conn,
         base_cte
@@ -129,7 +106,7 @@ def dashboard_principal(conn, period: str):
         print("  (aucune activité sur la période)")
     print()
 
-    # ---- BLOC B : volume course ----
+    # ---- BLOC B : volume Run ----
     rows = q(
         conn,
         base_cte
@@ -149,7 +126,7 @@ def dashboard_principal(conn, period: str):
     print(f"  Distance    : {float(km_run or 0):.1f} km")
     print(f"  Temps (via streams) : {float(run_minutes or 0):.1f} min\n")
 
-    # ---- BLOC C : intensité déclarée (minutes + %) + couverture ----
+    # ---- BLOC C : intensité déclarée + couverture ----
     coverage_rows = q(
         conn,
         f"""
@@ -207,7 +184,7 @@ def dashboard_principal(conn, period: str):
         print("  (aucune intensité déclarée sur la période)")
     print()
 
-    # ---- BLOC D : charge interne (RPE × durée) — Run-only + couverture ----
+    # ---- BLOC D : charge interne Run (RPE x durée) ----
     rows = q(
         conn,
         base_cte
@@ -228,7 +205,7 @@ def dashboard_principal(conn, period: str):
     print(f"  Couverture RPE: {int(n_with_rpe)} / {int(n_total)} séances Run sur la période")
     print("  Note: durée utilisée = time_s issue des streams Strava.\n")
 
-    # ---- BLOC E : performance factuelle (Run) ----
+    # ---- BLOC E : performance factuelle ----
     rows = q(
         conn,
         base_cte
@@ -253,7 +230,7 @@ def dashboard_principal(conn, period: str):
         print("  FC moyenne      : (non disponible)")
     print()
 
-    # ---- BLOC F : dénivelé total (D+) sur Run ----
+    # ---- BLOC F : D+ total ----
     rows = q(
         conn,
         f"""
@@ -291,7 +268,7 @@ def dashboard_principal(conn, period: str):
     print("BLOC F — Terrain / dénivelé (Run)")
     print(f"  D+ total : {float(dplus_total or 0):.0f} m\n")
 
-    # ---- BLOC G : continuité long terme (factuel) ----
+    # ---- BLOC G : continuité (factuel) ----
     rows = q(
         conn,
         """
@@ -312,8 +289,7 @@ def dashboard_principal(conn, period: str):
                 continue
             ss = s[:-1] if s.endswith("Z") else s
             try:
-                dt = datetime.fromisoformat(ss)
-                dates.append(dt)
+                dates.append(datetime.fromisoformat(ss))
             except ValueError:
                 continue
 
@@ -431,7 +407,10 @@ def advanced_list(conn, period: str, limit: int):
         terr_str = f" | {terrain_type}" if terrain_type else ""
         shoes_str = f" | {shoes}" if shoes else ""
         hr_str = f" | HR:{float(avg_hr):.1f}" if avg_hr is not None else ""
-        print(f"- {aid} | {date_s} | {typ} | {name} | {float(km):.2f} km | {float(minutes):.1f} min{hr_str}{rpe_str}{terr_str}{shoes_str}{inten_str}")
+        print(
+            f"- {aid} | {date_s} | {typ} | {name} | {float(km):.2f} km | {float(minutes):.1f} min"
+            f"{hr_str}{rpe_str}{terr_str}{shoes_str}{inten_str}"
+        )
 
     print("\nTip: pour le détail d’une séance:")
     print("  python -m app.dashboard.dashboard --mode advanced --activity-id <ID>\n")
@@ -509,6 +488,7 @@ def advanced_detail(conn, activity_id: int):
         """,
         (activity_id,),
     )
+
     inten_note_row = q(
         conn,
         "SELECT intensity_note FROM session_intensity_note WHERE activity_id = ?",
